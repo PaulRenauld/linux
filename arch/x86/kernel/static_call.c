@@ -6,7 +6,7 @@
 
 static void __static_call_transform(void *insn, u8 opcode, void *func)
 {
-	const void *code = text_gen_insn(opcode, (long)insn, (long)func);
+	const void *code = text_gen_insn(opcode, insn, func);
 
 	if (WARN_ONCE(*(u8 *)insn != opcode,
 		      "unexpected static call insn opcode 0x%x at %pS\n",
@@ -25,6 +25,9 @@ void arch_static_call_transform(void *site, void *tramp, void *func)
 
 	if (tramp)
 		__static_call_transform(tramp, JMP32_INSN_OPCODE, func);
+
+	if (IS_ENABLED(CONFIG_HAVE_STATIC_CALL_INLINE) && site)
+		__static_call_transform(site, CALL_INSN_OPCODE, func);
 
 	mutex_unlock(&text_mutex);
 }
