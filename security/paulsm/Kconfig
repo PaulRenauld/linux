@@ -1,6 +1,6 @@
-
+# SPDX-License-Identifier: GPL-2.0-only
 config SECURITY_PAULSM
-	bool "Prevent deleting files for which the name starts with `paul`"
+	bool "Prevents any file that starts with `paul` to be deleted"
 	depends on SECURITY && BLOCK
 	help
 	  Any hard link unlinking on files that starts with `paul` will be prevented, and an error message will be displayed.
