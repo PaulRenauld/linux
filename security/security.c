@@ -10,6 +10,7 @@
 
 #define pr_fmt(fmt) "LSM: " fmt
 
+#ifndef DEBUG_NO_IMPORT
 #include <linux/bpf.h>
 #include <linux/capability.h>
 #include <linux/dcache.h>
@@ -28,6 +29,10 @@
 #include <linux/string.h>
 #include <linux/msg.h>
 #include <net/flow.h>
+#include <linux/static_call.h>
+#include <linux/static_key.h>
+#include <linux/printk.h>
+#endif
 
 #define MAX_LSM_EVM_XATTR	2
 
@@ -464,6 +469,47 @@ static int lsm_append(const char *new, char **result)
 	return 0;
 }
 
+#define LSM_FUNC_DEFAULT(NAME)		NAME##_func_default
+#define HOOK_STATIC_CALL(HOOK, NUM)	static_call_##HOOK##_##NUM
+#define HOOK_STATIC_CHECK(HOOK, NUM)	static_check_##HOOK##_##NUM
+
+#define LSM_HOOK(RET, DEFAULT, NAME, ...)		\
+noinline RET LSM_FUNC_DEFAULT(NAME)(__VA_ARGS__)	\
+{							\
+	return DEFAULT;					\
+}
+#include <linux/lsm_hook_defs.h>
+#undef LSM_HOOK
+
+#define CREATE_STATIC(NAME, NUM)			\
+	DEFINE_STATIC_CALL(HOOK_STATIC_CALL(NAME, NUM), LSM_FUNC_DEFAULT(NAME));\
+	DEFINE_STATIC_KEY_FALSE(HOOK_STATIC_CHECK(NAME, NUM));
+
+
+#define LSM_HOOK(RET, DEFAULT, NAME, ...)		\
+	CREATE_STATIC(NAME, 1)				\
+	CREATE_STATIC(NAME, 2)				\
+	CREATE_STATIC(NAME, 3)
+#include <linux/lsm_hook_defs.h>
+#undef LSM_HOOK
+#undef CREATE_STATIC
+
+#define TRY_TO_ADD(HOOK, FUNC, NUM)			\
+	if (static_branch_unlikely(&HOOK_STATIC_CHECK(HOOK, NUM))) {	\
+		static_call_update(HOOK_STATIC_CALL(HOOK, NUM), FUNC); 	\
+		static_branch_enable(&HOOK_STATIC_CHECK(HOOK, NUM)); 	\
+		break;							\
+	}
+
+#define ADD_STATIC_HOOK(HOOK, FUNC)			\
+	do {						\
+		TRY_TO_ADD(HOOK, FUNC, 1)		\
+		TRY_TO_ADD(HOOK, FUNC, 2)		\
+		TRY_TO_ADD(HOOK, FUNC, 3)		\
+		printk(KERN_ERR "No slot remaining to add LSM hook for " "\n"); \
+	} while(0)
+
+
 /**
  * security_add_hooks - Add a modules hooks to the hook lists.
  * @hooks: the hooks to add
@@ -480,6 +526,12 @@ void __init security_add_hooks(struct security_hook_list *hooks, int count,
 	for (i = 0; i < count; i++) {
 		hooks[i].lsm = lsm;
 		hlist_add_tail_rcu(&hooks[i].list, hooks[i].head);
+
+		#define LSM_HOOK(RET, DEFAULT, NAME, ...)			\
+		if (&security_hook_heads.NAME == hooks[i].head)			\
+			ADD_STATIC_HOOK(NAME, hooks[i].hook.NAME);
+		#include <linux/lsm_hook_defs.h>
+		#undef LSM_HOOK
 	}
 
 	/*
