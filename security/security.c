@@ -495,7 +495,7 @@ noinline RET LSM_FUNC_DEFAULT(NAME)(__VA_ARGS__)	\
 #undef CREATE_STATIC
 
 #define TRY_TO_ADD(HOOK, FUNC, NUM)			\
-	if (static_branch_unlikely(&HOOK_STATIC_CHECK(HOOK, NUM))) {	\
+	if (!static_branch_unlikely(&HOOK_STATIC_CHECK(HOOK, NUM))) {	\
 		static_call_update(HOOK_STATIC_CALL(HOOK, NUM), FUNC); 	\
 		static_branch_enable(&HOOK_STATIC_CHECK(HOOK, NUM)); 	\
 		break;							\
@@ -506,7 +506,7 @@ noinline RET LSM_FUNC_DEFAULT(NAME)(__VA_ARGS__)	\
 		TRY_TO_ADD(HOOK, FUNC, 1)		\
 		TRY_TO_ADD(HOOK, FUNC, 2)		\
 		TRY_TO_ADD(HOOK, FUNC, 3)		\
-		printk(KERN_ERR "No slot remaining to add LSM hook for " "\n"); \
+		printk(KERN_ERR "No slot remaining to add LSM hook for " #HOOK "\n"); \
 	} while(0)
 
 
@@ -526,6 +526,8 @@ void __init security_add_hooks(struct security_hook_list *hooks, int count,
 	for (i = 0; i < count; i++) {
 		hooks[i].lsm = lsm;
 		hlist_add_tail_rcu(&hooks[i].list, hooks[i].head);
+		// if (&security_hook_heads.file_permission == hooks[i].head)
+		// 	ADD_STATIC_HOOK(file_permission, hooks[i].hook.file_permission);
 
 		#define LSM_HOOK(RET, DEFAULT, NAME, ...)			\
 		if (&security_hook_heads.NAME == hooks[i].head)			\
@@ -739,6 +741,14 @@ static void __init lsm_early_task(struct task_struct *task)
 #include <linux/lsm_hook_defs.h>
 #undef LSM_HOOK
 
+
+#define TRY_TO_STATIC_CALL(R, HOOK, NUM, ...)			\
+	if (static_branch_unlikely(&HOOK_STATIC_CHECK(HOOK, NUM))) {		\
+		R = static_call(HOOK_STATIC_CALL(HOOK, NUM))(__VA_ARGS__); 	\
+		if (R != 0)					\
+			break;					\
+	}
+
 /*
  * Hook list operation macros.
  *
@@ -751,25 +761,32 @@ static void __init lsm_early_task(struct task_struct *task)
 
 #define call_void_hook(FUNC, ...)				\
 	do {							\
-		struct security_hook_list *P;			\
-								\
-		hlist_for_each_entry(P, &security_hook_heads.FUNC, list) \
-			P->hook.FUNC(__VA_ARGS__);		\
+		static_call_cond(HOOK_STATIC_CALL(FUNC, 1))(__VA_ARGS__);	\ 
+		static_call_cond(HOOK_STATIC_CALL(FUNC, 2))(__VA_ARGS__);	\ 
+		static_call_cond(HOOK_STATIC_CALL(FUNC, 3))(__VA_ARGS__);	\ 
 	} while (0)
+
+		// struct security_hook_list *P;			\
+		// 						\
+		// hlist_for_each_entry(P, &security_hook_heads.FUNC, list) \
+		// 	P->hook.FUNC(__VA_ARGS__);		\
 
 #define call_int_hook(FUNC, IRC, ...) ({			\
 	int RC = IRC;						\
 	do {							\
-		struct security_hook_list *P;			\
-								\
-		hlist_for_each_entry(P, &security_hook_heads.FUNC, list) { \
-			RC = P->hook.FUNC(__VA_ARGS__);		\
-			if (RC != 0)				\
-				break;				\
-		}						\
+		TRY_TO_STATIC_CALL(RC, FUNC, 1, __VA_ARGS__)	\
+		TRY_TO_STATIC_CALL(RC, FUNC, 2, __VA_ARGS__)	\
+		TRY_TO_STATIC_CALL(RC, FUNC, 3, __VA_ARGS__)	\
 	} while (0);						\
 	RC;							\
 })
+		// struct security_hook_list *P;			\
+		// 						\
+		// hlist_for_each_entry(P, &security_hook_heads.FUNC, list) { \
+		// 	RC = P->hook.FUNC(__VA_ARGS__);		\
+		// 	if (RC != 0)				\
+		// 		break;				\
+		// }						\
 
 /* Security operations */
 
