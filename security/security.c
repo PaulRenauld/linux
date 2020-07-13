@@ -10,7 +10,6 @@
 
 #define pr_fmt(fmt) "LSM: " fmt
 
-#ifndef DEBUG_NO_IMPORT
 #include <linux/bpf.h>
 #include <linux/capability.h>
 #include <linux/dcache.h>
@@ -32,7 +31,6 @@
 #include <linux/static_call.h>
 #include <linux/static_key.h>
 #include <linux/printk.h>
-#endif
 
 #define MAX_LSM_EVM_XATTR	2
 
@@ -485,7 +483,6 @@ noinline RET LSM_FUNC_DEFAULT(NAME)(__VA_ARGS__)	\
 	DEFINE_STATIC_CALL(HOOK_STATIC_CALL(NAME, NUM), LSM_FUNC_DEFAULT(NAME));\
 	DEFINE_STATIC_KEY_FALSE(HOOK_STATIC_CHECK(NAME, NUM));
 
-
 #define LSM_HOOK(RET, DEFAULT, NAME, ...)		\
 	CREATE_STATIC(NAME, 1)				\
 	CREATE_STATIC(NAME, 2)				\
@@ -508,7 +505,6 @@ noinline RET LSM_FUNC_DEFAULT(NAME)(__VA_ARGS__)	\
 		TRY_TO_ADD(HOOK, FUNC, 3)		\
 		printk(KERN_ERR "No slot remaining to add LSM hook for " #HOOK "\n"); \
 	} while(0)
-
 
 /**
  * security_add_hooks - Add a modules hooks to the hook lists.
@@ -764,7 +760,6 @@ static void __init lsm_early_task(struct task_struct *task)
 		static_call_cond(HOOK_STATIC_CALL(FUNC, 3))(__VA_ARGS__);	\
 	} while (0)
 
-
 // #define call_void_hook(FUNC, ...)				\
 	do {							\
 		struct security_hook_list *P;			\
@@ -772,7 +767,6 @@ static void __init lsm_early_task(struct task_struct *task)
 		hlist_for_each_entry(P, &security_hook_heads.FUNC, list) \
 			P->hook.FUNC(__VA_ARGS__);		\
 	} while (0)
-
 
 #define call_int_hook(FUNC, IRC, ...) ({			\
 	int RC = IRC;						\
