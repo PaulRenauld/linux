@@ -526,8 +526,6 @@ void __init security_add_hooks(struct security_hook_list *hooks, int count,
 	for (i = 0; i < count; i++) {
 		hooks[i].lsm = lsm;
 		hlist_add_tail_rcu(&hooks[i].list, hooks[i].head);
-		// if (&security_hook_heads.file_permission == hooks[i].head)
-		// 	ADD_STATIC_HOOK(file_permission, hooks[i].hook.file_permission);
 
 		#define LSM_HOOK(RET, DEFAULT, NAME, ...)			\
 		if (&security_hook_heads.NAME == hooks[i].head)			\
@@ -761,15 +759,20 @@ static void __init lsm_early_task(struct task_struct *task)
 
 #define call_void_hook(FUNC, ...)				\
 	do {							\
-		static_call_cond(HOOK_STATIC_CALL(FUNC, 1))(__VA_ARGS__);	\ 
-		static_call_cond(HOOK_STATIC_CALL(FUNC, 2))(__VA_ARGS__);	\ 
-		static_call_cond(HOOK_STATIC_CALL(FUNC, 3))(__VA_ARGS__);	\ 
+		static_call_cond(HOOK_STATIC_CALL(FUNC, 1))(__VA_ARGS__);	\
+		static_call_cond(HOOK_STATIC_CALL(FUNC, 2))(__VA_ARGS__);	\
+		static_call_cond(HOOK_STATIC_CALL(FUNC, 3))(__VA_ARGS__);	\
 	} while (0)
 
-		// struct security_hook_list *P;			\
-		// 						\
-		// hlist_for_each_entry(P, &security_hook_heads.FUNC, list) \
-		// 	P->hook.FUNC(__VA_ARGS__);		\
+
+// #define call_void_hook(FUNC, ...)				\
+	do {							\
+		struct security_hook_list *P;			\
+								\
+		hlist_for_each_entry(P, &security_hook_heads.FUNC, list) \
+			P->hook.FUNC(__VA_ARGS__);		\
+	} while (0)
+
 
 #define call_int_hook(FUNC, IRC, ...) ({			\
 	int RC = IRC;						\
@@ -780,13 +783,20 @@ static void __init lsm_early_task(struct task_struct *task)
 	} while (0);						\
 	RC;							\
 })
-		// struct security_hook_list *P;			\
-		// 						\
-		// hlist_for_each_entry(P, &security_hook_heads.FUNC, list) { \
-		// 	RC = P->hook.FUNC(__VA_ARGS__);		\
-		// 	if (RC != 0)				\
-		// 		break;				\
-		// }						\
+
+// #define call_int_hook(FUNC, IRC, ...) ({			\
+	int RC = IRC;						\
+	do {							\
+		struct security_hook_list *P;			\
+								\
+		hlist_for_each_entry(P, &security_hook_heads.FUNC, list) { \
+			RC = P->hook.FUNC(__VA_ARGS__);		\
+			if (RC != 0)				\
+				break;				\
+		}						\
+	} while (0);						\
+	RC;							\
+})
 
 /* Security operations */
 
