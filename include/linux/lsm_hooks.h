@@ -28,6 +28,8 @@
 #include <linux/security.h>
 #include <linux/init.h>
 #include <linux/rculist.h>
+#include <linux/static_call.h>
+#include <linux/static_key.h>
 
 /**
  * union security_list_options - Linux Security Module hook function list
@@ -1524,10 +1526,30 @@ union security_list_options {
 	#define LSM_HOOK(RET, DEFAULT, NAME, ...) RET (*NAME)(__VA_ARGS__);
 	#include "lsm_hook_defs.h"
 	#undef LSM_HOOK
+	void *generic_func;
 };
 
 struct security_hook_heads {
 	#define LSM_HOOK(RET, DEFAULT, NAME, ...) struct hlist_head NAME;
+	#include "lsm_hook_defs.h"
+	#undef LSM_HOOK
+} __randomize_layout;
+
+#define SLOT_COUNT 3
+#define FOR_EACH_HOOK_SLOT(M, ...)			\
+	M(0, __VA_ARGS__)				\
+	M(1, __VA_ARGS__)				\
+	M(2, __VA_ARGS__)
+
+struct static_slot {
+	struct static_key_false *key;
+	struct static_call_key *call_key;
+	void *call_tramp;
+};
+
+struct hook_static_slots {
+	#define LSM_HOOK(RET, DEFAULT, NAME, ...)	\
+		struct static_slot NAME[SLOT_COUNT];
 	#include "lsm_hook_defs.h"
 	#undef LSM_HOOK
 } __randomize_layout;
@@ -1541,6 +1563,7 @@ struct security_hook_list {
 	struct hlist_head		*head;
 	union security_list_options	hook;
 	char				*lsm;
+	struct static_slot		*slots;
 } __randomize_layout;
 
 /*
@@ -1568,9 +1591,11 @@ struct lsm_blob_sizes {
  * text involved.
  */
 #define LSM_HOOK_INIT(HEAD, HOOK) \
-	{ .head = &security_hook_heads.HEAD, .hook = { .HEAD = HOOK } }
+	{ .head = &security_hook_heads.HEAD, .hook = { .HEAD = HOOK },	\
+	  .slots = hook_static_slots.HEAD }
 
 extern struct security_hook_heads security_hook_heads;
+extern struct hook_static_slots hook_static_slots;
 extern char *lsm_names;
 
 extern void security_add_hooks(struct security_hook_list *hooks, int count,
