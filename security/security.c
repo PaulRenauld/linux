@@ -95,19 +95,15 @@ static __initdata struct lsm_info *exclusive;
 #define HOOK_STATIC_CALL(HOOK, NUM)	static_call_##HOOK##_##NUM
 #define HOOK_STATIC_CHECK(HOOK, NUM)	static_check_##HOOK##_##NUM
 
-#define CREATE_STATIC(NUM, NAME)				\
-	DEFINE_STATIC_CALL(HOOK_STATIC_CALL(NAME, NUM),		\
-			   LSM_FUNC_DEFAULT(NAME));		\
+#define CREATE_STATIC(NUM, NAME, RET, ...)				\
+	DEFINE_STATIC_CALL_NULL(HOOK_STATIC_CALL(NAME, NUM),		\
+				*((RET(*)(__VA_ARGS__))NULL));		\
 	DEFINE_STATIC_KEY_FALSE(HOOK_STATIC_CHECK(NAME, NUM));
 
 // We need a default function that will not be called so that
 // static_call can infer the expected type
 #define LSM_HOOK(RET, DEFAULT, NAME, ...) 		\
-	noinline RET LSM_FUNC_DEFAULT(NAME)(__VA_ARGS__)\
-	{						\
-		return DEFAULT;				\
-	}						\
-	FOR_EACH_HOOK_SLOT(CREATE_STATIC, NAME)
+	FOR_EACH_HOOK_SLOT(CREATE_STATIC, NAME, RET, __VA_ARGS__)
 #include <linux/lsm_hook_defs.h>
 #undef LSM_HOOK
 #undef CREATE_STATIC
