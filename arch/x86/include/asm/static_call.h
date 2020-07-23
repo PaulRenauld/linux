@@ -37,4 +37,7 @@
 #define ARCH_DEFINE_STATIC_CALL_NULL_TRAMP(name)			\
 	__ARCH_DEFINE_STATIC_CALL_TRAMP(name, "ret; nop; nop; nop; nop")
 
+#define ARCH_SET_STATIC_CALL_DEFAULT_VALUE(i)				\
+	asm("mov $" #i ",%eax\t\n")
+
 #endif /* _ASM_STATIC_CALL_H */

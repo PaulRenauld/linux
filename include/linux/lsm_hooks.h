@@ -29,7 +29,6 @@
 #include <linux/init.h>
 #include <linux/rculist.h>
 #include <linux/static_call.h>
-#include <linux/static_key.h>
 
 /**
  * union security_list_options - Linux Security Module hook function list
@@ -1542,7 +1541,6 @@ struct security_hook_heads {
 	M(2, __VA_ARGS__)
 
 struct static_slot {
-	struct static_key_false *key;
 	struct static_call_key *call_key;
 	void *call_tramp;
 };

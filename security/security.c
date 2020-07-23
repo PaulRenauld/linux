@@ -93,12 +93,10 @@ static __initdata struct lsm_info *exclusive;
 /* static slots init */
 #define LSM_FUNC_DEFAULT(NAME)		NAME##_func_default
 #define HOOK_STATIC_CALL(HOOK, NUM)	static_call_##HOOK##_##NUM
-#define HOOK_STATIC_CHECK(HOOK, NUM)	static_check_##HOOK##_##NUM
 
 #define CREATE_STATIC(NUM, NAME, RET, ...)				\
 	DEFINE_STATIC_CALL_NULL(HOOK_STATIC_CALL(NAME, NUM),		\
-				*((RET(*)(__VA_ARGS__))NULL));		\
-	DEFINE_STATIC_KEY_FALSE(HOOK_STATIC_CHECK(NAME, NUM));
+				*((RET(*)(__VA_ARGS__))NULL));
 
 // We need a default function that will not be called so that
 // static_call can infer the expected type
@@ -111,7 +109,6 @@ static __initdata struct lsm_info *exclusive;
 struct hook_static_slots hook_static_slots __lsm_ro_after_init = {
 #define SLOT_DEFINITION(NUM, NAME) 				\
 	(struct static_slot) {					\
-		.key = &HOOK_STATIC_CHECK(NAME, NUM),	\
 		.call_key = &STATIC_CALL_KEY(HOOK_STATIC_CALL(NAME, NUM)),	\
 		.call_tramp = &STATIC_CALL_TRAMP(HOOK_STATIC_CALL(NAME, NUM))	\
 	},
@@ -525,11 +522,10 @@ void __init security_add_hooks(struct security_hook_list *hooks, int count,
 			continue;
 		for (slot = hooks[i].slots;
 		     slot < hooks[i].slots + SLOT_COUNT; slot++) {
-			if (!static_key_enabled(&slot->key->key)) {
+			if (!slot->call_key->func) {
 				__static_call_update(
 					slot->call_key, slot->call_tramp,
 					hooks[i].hook.generic_func);
-				static_branch_enable(slot->key);
 				break;
 			}
 		}
@@ -745,12 +741,10 @@ static void __init lsm_early_task(struct task_struct *task)
 #undef LSM_HOOK
 
 
-#define TRY_TO_STATIC_CALL_INT(NUM, R, HOOK, ...)		\
-	if (static_branch_unlikely(&HOOK_STATIC_CHECK(HOOK, NUM))) {		\
-		R = static_call(HOOK_STATIC_CALL(HOOK, NUM))(__VA_ARGS__); 	\
-		if (R != 0)					\
-			break;					\
-	}
+#define TRY_TO_STATIC_CALL_INT(NUM, R, HOOK, ...)			\
+	R = static_call_cond_int(HOOK_STATIC_CALL(HOOK, NUM), 0)(__VA_ARGS__); 	\
+	if (R != 0)							\
+		break;
 
 #define TRY_TO_STATIC_CALL_VOID(NUM, HOOK, ...)			\
 	static_call_cond(HOOK_STATIC_CALL(HOOK, NUM))(__VA_ARGS__);
@@ -1578,8 +1572,9 @@ int security_mmap_file(struct file *file, unsigned long prot,
 			unsigned long flags)
 {
 	int ret;
+	long mmap_p = mmap_prot(file, prot);
 	ret = call_int_hook(mmap_file, 0, file, prot,
-					mmap_prot(file, prot), flags);
+					mmap_p, flags);
 	if (ret)
 		return ret;
 	return ima_file_mmap(file, prot);

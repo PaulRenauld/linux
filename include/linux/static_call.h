@@ -176,6 +176,11 @@ extern int static_call_text_reserved(void *start, void *end);
 
 #define static_call(name)	__static_call(name)
 #define static_call_cond(name)	(void)__static_call(name)
+#define static_call_cond_int(name, _default) 				\
+({									\
+	ARCH_SET_STATIC_CALL_DEFAULT_VALUE(_default);			\
+	__static_call(name);						\
+})
 
 #define EXPORT_STATIC_CALL(name)					\
 	EXPORT_SYMBOL(STATIC_CALL_KEY(name));				\
