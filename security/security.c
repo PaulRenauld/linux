@@ -38,6 +38,8 @@
 /* How many LSMs were built into the kernel? */
 #define LSM_COUNT (__end_lsm_info - __start_lsm_info)
 
+#define STATIC_SLOT(HOOK, NUM)	security_static_slot_##HOOK##_##NUM
+
 /*
  * These are descriptions of the reasons that can be passed to the
  * security_locked_down() LSM hook. Placing this array here allows
@@ -90,37 +92,32 @@ static __initconst const char * const builtin_lsm_order = CONFIG_LSM;
 static __initdata struct lsm_info **ordered_lsms;
 static __initdata struct lsm_info *exclusive;
 
-/* static slots init */
-#define LSM_FUNC_DEFAULT(NAME)		NAME##_func_default
-#define HOOK_STATIC_CALL(HOOK, NUM)	static_call_##HOOK##_##NUM
-
-#define CREATE_STATIC(NUM, NAME, RET, ...)				\
-	DEFINE_STATIC_CALL_NULL(HOOK_STATIC_CALL(NAME, NUM),		\
+/* Create the static slots for each LSM hook */
+#define CREATE_STATIC_SLOT(NUM, NAME, RET, ...)				\
+	DEFINE_STATIC_CALL_NULL(STATIC_SLOT(NAME, NUM),			\
 				*((RET(*)(__VA_ARGS__))NULL));
 
-// We need a default function that will not be called so that
-// static_call can infer the expected type
-#define LSM_HOOK(RET, DEFAULT, NAME, ...) 		\
-	FOR_EACH_HOOK_SLOT(CREATE_STATIC, NAME, RET, __VA_ARGS__)
+#define LSM_HOOK(RET, DEFAULT, NAME, ...) 				\
+	SECURITY_FOREACH_STATIC_SLOT(CREATE_STATIC_SLOT, NAME, RET, __VA_ARGS__)
 #include <linux/lsm_hook_defs.h>
 #undef LSM_HOOK
 #undef CREATE_STATIC
 
-struct hook_static_slots hook_static_slots __lsm_ro_after_init = {
-#define SLOT_DEFINITION(NUM, NAME) 				\
-	(struct static_slot) {					\
-		.call_key = &STATIC_CALL_KEY(HOOK_STATIC_CALL(NAME, NUM)),	\
-		.call_tramp = &STATIC_CALL_TRAMP(HOOK_STATIC_CALL(NAME, NUM))	\
+struct security_list_static_slots security_list_static_slots
+__lsm_ro_after_init = {
+#define SLOT_DEFINITION(NUM, NAME) 					\
+	(struct security_static_slot) {					\
+		.key = &STATIC_CALL_KEY(STATIC_SLOT(NAME, NUM)),	\
+		.tramp = &STATIC_CALL_TRAMP(STATIC_SLOT(NAME, NUM))	\
 	},
-#define LSM_HOOK(RET, DEFAULT, NAME, ...) 			\
-	.NAME = {						\
-		FOR_EACH_HOOK_SLOT(SLOT_DEFINITION, NAME)	\
+#define LSM_HOOK(RET, DEFAULT, NAME, ...) 				\
+	.NAME = {							\
+		SECURITY_FOREACH_STATIC_SLOT(SLOT_DEFINITION, NAME)	\
 	},
 #include <linux/lsm_hook_defs.h>
 #undef LSM_HOOK
 #undef SLOT_DEFINITION
 };
-
 
 static __initdata bool debug;
 #define init_debug(...)						\
@@ -500,6 +497,26 @@ static int lsm_append(const char *new, char **result)
 	return 0;
 }
 
+static inline void add_to_static_slots(struct security_static_slot *slot_list,
+				       void *func)
+{
+	struct security_static_slot *slot;
+
+	if (!slot_list || !func)
+		panic("%s - Incorrectly initialized hook.\n", __func__);
+
+	for (slot = slot_list; slot < slot_list + SECURITY_STATIC_SLOT_COUNT;
+	     slot++) {
+		if (!slot->key->func) {
+			__static_call_update(slot->key, slot->tramp, func);
+			break;
+		}
+	}
+	if (slot == slot_list + SECURITY_STATIC_SLOT_COUNT)
+		panic("%s - No static hook slot remaining to add LSM hook.\n",
+		      __func__);
+}
+
 /**
  * security_add_hooks - Add a modules hooks to the hook lists.
  * @hooks: the hooks to add
@@ -512,27 +529,11 @@ void __init security_add_hooks(struct security_hook_list *hooks, int count,
 				char *lsm)
 {
 	int i;
-	struct static_slot *slot;
 
 	for (i = 0; i < count; i++) {
 		hooks[i].lsm = lsm;
 		hlist_add_tail_rcu(&hooks[i].list, hooks[i].head);
-
-		if (!hooks[i].slots || !hooks[i].hook.generic_func)
-			continue;
-		for (slot = hooks[i].slots;
-		     slot < hooks[i].slots + SLOT_COUNT; slot++) {
-			if (!slot->call_key->func) {
-				__static_call_update(
-					slot->call_key, slot->call_tramp,
-					hooks[i].hook.generic_func);
-				break;
-			}
-		}
-		if (slot == hooks[i].slots + SLOT_COUNT) {
-			printk(KERN_ERR 
-			       "No slot remaining to add LSM hook %s\n", lsm);
-		}
+		add_to_static_slots(hooks[i].slots, hooks[i].hook.generic_func);
 	}
 
 	/*
@@ -740,14 +741,6 @@ static void __init lsm_early_task(struct task_struct *task)
 #include <linux/lsm_hook_defs.h>
 #undef LSM_HOOK
 
-
-#define TRY_TO_STATIC_CALL_INT(NUM, R, HOOK, ...)			\
-	R = static_call_cond_int(HOOK_STATIC_CALL(HOOK, NUM), 0)(__VA_ARGS__); 	\
-	if (R != 0)							\
-		break;
-
-#define TRY_TO_STATIC_CALL_VOID(NUM, HOOK, ...)			\
-	static_call_cond(HOOK_STATIC_CALL(HOOK, NUM))(__VA_ARGS__);
 /*
  * Hook list operation macros.
  *
@@ -757,20 +750,27 @@ static void __init lsm_early_task(struct task_struct *task)
  * call_int_hook:
  *	This is a hook that returns a value.
  */
+#define CALL_STATIC_SLOT_VOID(NUM, HOOK, ...)				\
+	static_call_cond(STATIC_SLOT(HOOK, NUM))(__VA_ARGS__);
 
-#define call_void_hook(FUNC, ...)				\
-	do {							\
-		FOR_EACH_HOOK_SLOT(TRY_TO_STATIC_CALL_VOID, 	\
-				   FUNC, __VA_ARGS__)		\
+#define call_void_hook(FUNC, ...)					\
+	do {								\
+		SECURITY_FOREACH_STATIC_SLOT(CALL_STATIC_SLOT_VOID, 	\
+				   	     FUNC, __VA_ARGS__)		\
 	} while (0)
 
-#define call_int_hook(FUNC, IRC, ...) ({			\
-	int RC = IRC;						\
-	do {							\
-		FOR_EACH_HOOK_SLOT(TRY_TO_STATIC_CALL_INT,	\
-				   RC, FUNC, __VA_ARGS__)	\
-	} while (0);						\
-	RC;							\
+#define CALL_STATIC_SLOT_INT(NUM, R, HOOK, ...)				\
+	R = static_call_cond_int(STATIC_SLOT(HOOK, NUM), 0)(__VA_ARGS__);\
+	if (R != 0)							\
+		break;
+
+#define call_int_hook(FUNC, IRC, ...) ({				\
+	int RC = IRC;							\
+	do {								\
+		SECURITY_FOREACH_STATIC_SLOT(CALL_STATIC_SLOT_INT,	\
+					     RC, FUNC, __VA_ARGS__)	\
+	} while (0);							\
+	RC;								\
 })
 
 /* Security operations */

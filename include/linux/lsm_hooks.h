@@ -1534,20 +1534,30 @@ struct security_hook_heads {
 	#undef LSM_HOOK
 } __randomize_layout;
 
-#define SLOT_COUNT 3
-#define FOR_EACH_HOOK_SLOT(M, ...)			\
-	M(0, __VA_ARGS__)				\
-	M(1, __VA_ARGS__)				\
+/*
+ * Static slots are placeholders for potential LSM hooks.
+ * Instead of a costly indirect call, they use static calls.
+ */
+#define SECURITY_STATIC_SLOT_COUNT 3
+#define SECURITY_FOREACH_STATIC_SLOT(M, ...)				\
+	M(0, __VA_ARGS__)						\
+	M(1, __VA_ARGS__)						\
 	M(2, __VA_ARGS__)
 
-struct static_slot {
-	struct static_call_key *call_key;
-	void *call_tramp;
+/*
+ * Necessary information about a static
+ * slot to call __static_call_update
+ */
+struct security_static_slot {
+	/* static call key as defined by STATIC_CALL_KEY */
+	struct static_call_key *key;
+	/* static call tramp as defined by STATIC_CALL_TRAMP */
+	void *tramp;
 };
 
-struct hook_static_slots {
-	#define LSM_HOOK(RET, DEFAULT, NAME, ...)	\
-		struct static_slot NAME[SLOT_COUNT];
+struct security_list_static_slots {
+	#define LSM_HOOK(RET, DEFAULT, NAME, ...)			\
+		struct security_static_slot NAME[SECURITY_STATIC_SLOT_COUNT];
 	#include "lsm_hook_defs.h"
 	#undef LSM_HOOK
 } __randomize_layout;
@@ -1561,7 +1571,7 @@ struct security_hook_list {
 	struct hlist_head		*head;
 	union security_list_options	hook;
 	char				*lsm;
-	struct static_slot		*slots;
+	struct security_static_slot	*slots;
 } __randomize_layout;
 
 /*
@@ -1588,12 +1598,13 @@ struct lsm_blob_sizes {
  * care of the common case and reduces the amount of
  * text involved.
  */
-#define LSM_HOOK_INIT(HEAD, HOOK) \
-	{ .head = &security_hook_heads.HEAD, .hook = { .HEAD = HOOK },	\
-	  .slots = hook_static_slots.HEAD }
+#define LSM_HOOK_INIT(HEAD, HOOK) 					\
+	{ .head = &security_hook_heads.HEAD, 				\
+	  .hook = { .HEAD = HOOK },					\
+	  .slots = security_list_static_slots.HEAD }
 
 extern struct security_hook_heads security_hook_heads;
-extern struct hook_static_slots hook_static_slots;
+extern struct security_list_static_slots security_list_static_slots;
 extern char *lsm_names;
 
 extern void security_add_hooks(struct security_hook_list *hooks, int count,
