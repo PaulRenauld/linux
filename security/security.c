@@ -30,8 +30,6 @@
 #include <net/flow.h>
 #include <linux/static_call.h>
 #include <linux/static_key.h>
-#include <linux/printk.h>
-
 
 #define MAX_LSM_EVM_XATTR	2
 
@@ -756,7 +754,7 @@ static void __init lsm_early_task(struct task_struct *task)
 #define call_void_hook(FUNC, ...)					\
 	do {								\
 		SECURITY_FOREACH_STATIC_SLOT(CALL_STATIC_SLOT_VOID, 	\
-				   	     FUNC, __VA_ARGS__)		\
+					     FUNC, __VA_ARGS__)		\
 	} while (0)
 
 #define CALL_STATIC_SLOT_INT(NUM, R, HOOK, ...)				\
