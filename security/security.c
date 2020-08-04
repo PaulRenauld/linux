@@ -8,7 +8,6 @@
  * Copyright (C) 2016 Mellanox Technologies
  */
 
-#include "vdso/limits.h"
 #define pr_fmt(fmt) "LSM: " fmt
 
 #include <linux/bpf.h>
@@ -29,8 +28,6 @@
 #include <linux/string.h>
 #include <linux/msg.h>
 #include <net/flow.h>
-#include <linux/static_call.h>
-#include <linux/static_key.h>
 
 #define MAX_LSM_EVM_XATTR	2
 
@@ -104,7 +101,7 @@ static __initdata struct lsm_info *exclusive;
 
 struct security_list_static_slots security_list_static_slots
 __lsm_ro_after_init = {
-#define DEFINE_SLOT(NUM, NAME) 						\
+#define DEFINE_SLOT(NUM, NAME)						\
 	(struct security_static_slot) {					\
 		.key = &STATIC_CALL_KEY(STATIC_SLOT(NAME, NUM)),	\
 		.tramp = &STATIC_CALL_TRAMP(STATIC_SLOT(NAME, NUM))	\
@@ -1604,9 +1601,8 @@ int security_mmap_file(struct file *file, unsigned long prot,
 			unsigned long flags)
 {
 	int ret;
-	long mmap_p = mmap_prot(file, prot);
 	ret = call_int_hook(mmap_file, 0, file, prot,
-					mmap_p, flags);
+					mmap_prot(file, prot), flags);
 	if (ret)
 		return ret;
 	return ima_file_mmap(file, prot);

@@ -1569,7 +1569,7 @@ struct security_hook_static_slots {
 };
 
 struct security_list_static_slots {
-	#define LSM_HOOK(RET, DEFAULT, NAME, ...)			\
+	#define LSM_HOOK(RET, DEFAULT, NAME, ...) \
 		struct security_hook_static_slots NAME;
 	#include "lsm_hook_defs.h"
 	#undef LSM_HOOK
@@ -1610,7 +1610,7 @@ struct lsm_blob_sizes {
  * care of the common case and reduces the amount of
  * text involved.
  */
-#define LSM_HOOK_INIT(HEAD, HOOK) 					\
+#define LSM_HOOK_INIT(HEAD, HOOK) \
 	{ .head = &security_hook_heads.HEAD, .hook = { .HEAD = HOOK } }
 
 extern struct security_hook_heads security_hook_heads;
