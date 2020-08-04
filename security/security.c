@@ -8,6 +8,7 @@
  * Copyright (C) 2016 Mellanox Technologies
  */
 
+#include "vdso/limits.h"
 #define pr_fmt(fmt) "LSM: " fmt
 
 #include <linux/bpf.h>
@@ -103,18 +104,22 @@ static __initdata struct lsm_info *exclusive;
 
 struct security_list_static_slots security_list_static_slots
 __lsm_ro_after_init = {
-#define SLOT_DEFINITION(NUM, NAME) 					\
+#define DEFINE_SLOT(NUM, NAME) 						\
 	(struct security_static_slot) {					\
 		.key = &STATIC_CALL_KEY(STATIC_SLOT(NAME, NUM)),	\
 		.tramp = &STATIC_CALL_TRAMP(STATIC_SLOT(NAME, NUM))	\
 	},
 #define LSM_HOOK(RET, DEFAULT, NAME, ...) 				\
 	.NAME = {							\
-		SECURITY_FOREACH_STATIC_SLOT(SLOT_DEFINITION, NAME)	\
+		.slots = {						\
+			SECURITY_FOREACH_STATIC_SLOT(DEFINE_SLOT, NAME)	\
+		},							\
+		.first_slot = INT_MAX,					\
+		.head = &security_hook_heads.NAME			\
 	},
 #include <linux/lsm_hook_defs.h>
 #undef LSM_HOOK
-#undef SLOT_DEFINITION
+#undef DEFINE_SLOT
 };
 
 static __initdata bool debug;
@@ -338,6 +343,52 @@ static void __init ordered_lsm_parse(const char *order, const char *origin)
 	kfree(sep);
 }
 
+static void __init
+lsm_init_hook_static_slot(struct security_hook_static_slots *hook)
+{
+	struct security_hook_list *pos;
+	struct security_static_slot *slot;
+	int slot_idx, slot_cnt, first_slot;
+
+	slot_cnt = 0;
+	// todo: race condition if hlist modified in between the two foreach
+	hlist_for_each_entry_rcu (pos, hook->head, list) {
+		slot_cnt++;
+	}
+
+	first_slot = SECURITY_STATIC_SLOT_COUNT - slot_cnt;
+	if (first_slot < 0)
+		panic("%s - No static hook slot remaining to add LSM hook.\n",
+		      __func__);
+
+	if (slot_cnt == 0) {
+		hook->first_slot = INT_MAX;
+		return;
+	}
+
+	slot_idx = first_slot;
+	hlist_for_each_entry_rcu (pos, hook->head, list) {
+		slot = &hook->slots[slot_idx];
+		__static_call_update(slot->key, slot->tramp,
+				     pos->hook.generic_func);
+		slot_idx++;
+	}
+
+	hook->first_slot = first_slot;
+}
+
+static void __init lsm_init_static_slots(void)
+{
+	int i, hook_cnt;
+	struct security_hook_static_slots *hooks =
+		(struct security_hook_static_slots *)&security_list_static_slots;
+	hook_cnt = sizeof(security_list_static_slots) /
+		   sizeof(struct security_hook_static_slots);
+
+	for (i = 0; i < hook_cnt; i++)
+		lsm_init_hook_static_slot(hooks + i);
+}
+
 static void __init lsm_early_cred(struct cred *cred);
 static void __init lsm_early_task(struct task_struct *task);
 
@@ -385,6 +436,7 @@ static void __init ordered_lsm_init(void)
 	lsm_early_task(current);
 	for (lsm = ordered_lsms; *lsm; lsm++)
 		initialize_lsm(*lsm);
+	lsm_init_static_slots();
 
 	kfree(ordered_lsms);
 }
@@ -405,6 +457,7 @@ int __init early_security_init(void)
 		prepare_lsm(lsm);
 		initialize_lsm(lsm);
 	}
+	lsm_init_static_slots();
 
 	return 0;
 }
@@ -495,26 +548,6 @@ static int lsm_append(const char *new, char **result)
 	return 0;
 }
 
-static inline void add_to_static_slots(struct security_static_slot *slot_list,
-				       void *func)
-{
-	struct security_static_slot *slot;
-
-	if (!slot_list || !func)
-		panic("%s - Incorrectly initialized hook.\n", __func__);
-
-	for (slot = slot_list; slot < slot_list + SECURITY_STATIC_SLOT_COUNT;
-	     slot++) {
-		if (!slot->key->func) {
-			__static_call_update(slot->key, slot->tramp, func);
-			break;
-		}
-	}
-	if (slot == slot_list + SECURITY_STATIC_SLOT_COUNT)
-		panic("%s - No static hook slot remaining to add LSM hook.\n",
-		      __func__);
-}
-
 /**
  * security_add_hooks - Add a modules hooks to the hook lists.
  * @hooks: the hooks to add
@@ -531,7 +564,6 @@ void __init security_add_hooks(struct security_hook_list *hooks, int count,
 	for (i = 0; i < count; i++) {
 		hooks[i].lsm = lsm;
 		hlist_add_tail_rcu(&hooks[i].list, hooks[i].head);
-		add_to_static_slots(hooks[i].slots, hooks[i].hook.generic_func);
 	}
 
 	/*
@@ -758,16 +790,18 @@ static void __init lsm_early_task(struct task_struct *task)
 	} while (0)
 
 #define CALL_STATIC_SLOT_INT(NUM, R, HOOK, ...)				\
-	R = static_call_cond_int(STATIC_SLOT(HOOK, NUM), 0)(__VA_ARGS__);\
-	if (R != 0)							\
-		break;
+	case NUM:							\
+		R = static_call(STATIC_SLOT(HOOK, NUM))(__VA_ARGS__);	\
+		if (R != 0) break;					\
+		fallthrough;
 
 #define call_int_hook(FUNC, IRC, ...) ({				\
 	int RC = IRC;							\
-	do {								\
+	switch (security_list_static_slots.FUNC.first_slot) {								\
 		SECURITY_FOREACH_STATIC_SLOT(CALL_STATIC_SLOT_INT,	\
 					     RC, FUNC, __VA_ARGS__)	\
-	} while (0);							\
+		default: break;						\
+	}								\
 	RC;								\
 })
 

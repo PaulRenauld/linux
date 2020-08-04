@@ -1555,9 +1555,22 @@ struct security_static_slot {
 	void *tramp;
 };
 
+/* Static slots and related information for a hook */
+struct security_hook_static_slots {
+	struct security_static_slot slots[SECURITY_STATIC_SLOT_COUNT];
+	/*
+	 * Index of first slot to be used.
+	 * All slots with greater index are used.
+	 * INT_MAX if no slot is used.
+	 */
+	int first_slot;
+	/* hlist corresponding to this hook */
+	struct hlist_head *head;
+};
+
 struct security_list_static_slots {
 	#define LSM_HOOK(RET, DEFAULT, NAME, ...)			\
-		struct security_static_slot NAME[SECURITY_STATIC_SLOT_COUNT];
+		struct security_hook_static_slots NAME;
 	#include "lsm_hook_defs.h"
 	#undef LSM_HOOK
 } __randomize_layout;
@@ -1571,7 +1584,6 @@ struct security_hook_list {
 	struct hlist_head		*head;
 	union security_list_options	hook;
 	char				*lsm;
-	struct security_static_slot	*slots;
 } __randomize_layout;
 
 /*
@@ -1599,9 +1611,7 @@ struct lsm_blob_sizes {
  * text involved.
  */
 #define LSM_HOOK_INIT(HEAD, HOOK) 					\
-	{ .head = &security_hook_heads.HEAD, 				\
-	  .hook = { .HEAD = HOOK },					\
-	  .slots = security_list_static_slots.HEAD }
+	{ .head = &security_hook_heads.HEAD, .hook = { .HEAD = HOOK } }
 
 extern struct security_hook_heads security_hook_heads;
 extern struct security_list_static_slots security_list_static_slots;
