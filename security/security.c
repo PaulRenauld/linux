@@ -139,7 +139,7 @@ struct security_first_static_slot_idx {
 	SECURITY_FOREACH_STATIC_SLOT(CREATE_STATIC_SLOT, NAME, RET, __VA_ARGS__)
 #include <linux/lsm_hook_defs.h>
 #undef LSM_HOOK
-#undef CREATE_STATIC
+#undef CREATE_STATIC_SLOT
 
 static struct security_list_static_slots security_list_static_slots
 __initdata = {
@@ -817,16 +817,18 @@ static void __init lsm_early_task(struct task_struct *task)
  * call_int_hook:
  *	This is a hook that returns a value.
  */
-#define CALL_STATIC_SLOT_VOID(NUM, HOOK, ...)				\
+#define __CASE_CALL_STATIC_VOID(NUM, HOOK, ...)				\
 	static_call_cond(STATIC_SLOT(HOOK, NUM))(__VA_ARGS__);
 
-#define call_void_hook(FUNC, ...)					\
-	do {								\
-		SECURITY_FOREACH_STATIC_SLOT(CALL_STATIC_SLOT_VOID, 	\
-					     FUNC, __VA_ARGS__)		\
-	} while (0)
+#define call_void_hook(FUNC, ...) do {					\
+	switch (security_first_static_slot_idx.FUNC) {			\
+		SECURITY_FOREACH_STATIC_SLOT(__CASE_CALL_STATIC_VOID,	\
+		FUNC, __VA_ARGS__)					\
+		default: break;						\
+	}								\
+} while (0)
 
-#define CALL_STATIC_SLOT_INT(NUM, R, HOOK, ...)				\
+#define __CASE_CALL_STATIC_INT(NUM, R, HOOK, ...)			\
 	case NUM:							\
 		R = static_call(STATIC_SLOT(HOOK, NUM))(__VA_ARGS__);	\
 		if (R != 0) break;					\
@@ -835,7 +837,7 @@ static void __init lsm_early_task(struct task_struct *task)
 #define call_int_hook(FUNC, IRC, ...) ({				\
 	int RC = IRC;							\
 	switch (security_first_static_slot_idx.FUNC) {			\
-		SECURITY_FOREACH_STATIC_SLOT(CALL_STATIC_SLOT_INT,	\
+		SECURITY_FOREACH_STATIC_SLOT(__CASE_CALL_STATIC_INT,	\
 					     RC, FUNC, __VA_ARGS__)	\
 		default: break;						\
 	}								\
