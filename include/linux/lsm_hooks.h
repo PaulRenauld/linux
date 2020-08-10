@@ -28,7 +28,6 @@
 #include <linux/security.h>
 #include <linux/init.h>
 #include <linux/rculist.h>
-#include <linux/static_call.h>
 
 /**
  * union security_list_options - Linux Security Module hook function list
@@ -1525,52 +1524,10 @@ union security_list_options {
 	#define LSM_HOOK(RET, DEFAULT, NAME, ...) RET (*NAME)(__VA_ARGS__);
 	#include "lsm_hook_defs.h"
 	#undef LSM_HOOK
-	void *generic_func;
 };
 
 struct security_hook_heads {
 	#define LSM_HOOK(RET, DEFAULT, NAME, ...) struct hlist_head NAME;
-	#include "lsm_hook_defs.h"
-	#undef LSM_HOOK
-} __randomize_layout;
-
-/*
- * Static slots are placeholders for potential LSM hooks.
- * Instead of a costly indirect call, they use static calls.
- */
-#define SECURITY_STATIC_SLOT_COUNT 3
-#define SECURITY_FOREACH_STATIC_SLOT(M, ...)				\
-	M(0, __VA_ARGS__)						\
-	M(1, __VA_ARGS__)						\
-	M(2, __VA_ARGS__)
-
-/*
- * Necessary information about a static
- * slot to call __static_call_update
- */
-struct security_static_slot {
-	/* static call key as defined by STATIC_CALL_KEY */
-	struct static_call_key *key;
-	/* static call tramp as defined by STATIC_CALL_TRAMP */
-	void *tramp;
-};
-
-/* Static slots and related information for a hook */
-struct security_hook_static_slots {
-	struct security_static_slot slots[SECURITY_STATIC_SLOT_COUNT];
-	/*
-	 * Index of first slot to be used.
-	 * All slots with greater index are used.
-	 * INT_MAX if no slot is used.
-	 */
-	int first_slot;
-	/* hlist corresponding to this hook */
-	struct hlist_head *head;
-};
-
-struct security_list_static_slots {
-	#define LSM_HOOK(RET, DEFAULT, NAME, ...) \
-		struct security_hook_static_slots NAME;
 	#include "lsm_hook_defs.h"
 	#undef LSM_HOOK
 } __randomize_layout;
@@ -1614,7 +1571,6 @@ struct lsm_blob_sizes {
 	{ .head = &security_hook_heads.HEAD, .hook = { .HEAD = HOOK } }
 
 extern struct security_hook_heads security_hook_heads;
-extern struct security_list_static_slots security_list_static_slots;
 extern char *lsm_names;
 
 extern void security_add_hooks(struct security_hook_list *hooks, int count,
