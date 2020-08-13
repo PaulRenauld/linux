@@ -818,7 +818,9 @@ static void __init lsm_early_task(struct task_struct *task)
  *	This is a hook that returns a value.
  */
 #define __CASE_CALL_STATIC_VOID(NUM, HOOK, ...)				\
-	static_call_cond(STATIC_SLOT(HOOK, NUM))(__VA_ARGS__);
+	case NUM:							\
+		static_call_cond(STATIC_SLOT(HOOK, NUM))(__VA_ARGS__);	\
+		fallthrough;
 
 #define call_void_hook(FUNC, ...) do {					\
 	switch (security_first_static_slot_idx.FUNC) {			\
