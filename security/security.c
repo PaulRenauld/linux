@@ -29,6 +29,8 @@
 #include <linux/msg.h>
 #include <net/flow.h>
 #include <linux/static_call.h>
+#include <linux/loop_unrolling.h>
+#include <linux/build_bug.h>
 
 #define MAX_LSM_EVM_XATTR	2
 
@@ -42,10 +44,9 @@
  * Instead of a costly indirect call, they use static calls.
  */
 #define SECURITY_STATIC_SLOT_COUNT 3
+static_assert(SECURITY_STATIC_SLOT_COUNT <= M_MAX_LOOP_UNROLLING);
 #define SECURITY_FOREACH_STATIC_SLOT(M, ...)				\
-	M(0, __VA_ARGS__)						\
-	M(1, __VA_ARGS__)						\
-	M(2, __VA_ARGS__)
+	M_LOOP_UNROLLING(SECURITY_STATIC_SLOT_COUNT, M, __VA_ARGS__)
 
 /*
  * These are descriptions of the reasons that can be passed to the
