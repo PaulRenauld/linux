@@ -408,7 +408,7 @@ static void __init lsm_init_hook_static_slot(struct security_static_slot *slots,
 	slot = slots + first_slot;
 	hlist_for_each_entry_rcu (pos, head, list) {
 		__static_call_update(slot->key, slot->tramp,
-				     (void *) &pos->hook);
+				     pos->hook.generic_func);
 		slot++;
 	}
 
