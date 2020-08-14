@@ -43,10 +43,10 @@
  * Static slots are placeholders for potential LSM hooks.
  * Instead of a costly indirect call, they use static calls.
  */
-#define SECURITY_STATIC_SLOT_COUNT 3
-static_assert(SECURITY_STATIC_SLOT_COUNT <= M_MAX_LOOP_UNROLLING);
+#define SECURITY_STATIC_SLOT_COUNT 11
+static_assert(SECURITY_STATIC_SLOT_COUNT <= MAX_UNROLL_MACRO_LOOP);
 #define SECURITY_FOREACH_STATIC_SLOT(M, ...)				\
-	M_LOOP_UNROLLING(SECURITY_STATIC_SLOT_COUNT, M, __VA_ARGS__)
+	UNROLL_MACRO_LOOP(SECURITY_STATIC_SLOT_COUNT, M, __VA_ARGS__)
 
 /*
  * These are descriptions of the reasons that can be passed to the
@@ -391,7 +391,6 @@ static void __init lsm_init_hook_static_slot(struct security_static_slot *slots,
 	int slot_cnt, first_slot;
 
 	slot_cnt = 0;
-	// todo: race condition if hlist modified in between the two foreach
 	hlist_for_each_entry_rcu (pos, head, list) {
 		slot_cnt++;
 	}
