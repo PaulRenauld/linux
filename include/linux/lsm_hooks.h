@@ -1524,6 +1524,7 @@ union security_list_options {
 	#define LSM_HOOK(RET, DEFAULT, NAME, ...) RET (*NAME)(__VA_ARGS__);
 	#include "lsm_hook_defs.h"
 	#undef LSM_HOOK
+	void *generic_func;
 };
 
 struct security_hook_heads {

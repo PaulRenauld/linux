@@ -28,6 +28,8 @@
 #include <linux/string.h>
 #include <linux/msg.h>
 #include <net/flow.h>
+#include <linux/static_call.h>
+#include <linux/lsm_static_call.h>
 
 #define MAX_LSM_EVM_XATTR	2
 
@@ -85,6 +87,128 @@ static __initconst const char * const builtin_lsm_order = CONFIG_LSM;
 /* Ordered list of LSMs to initialize. */
 static __initdata struct lsm_info **ordered_lsms;
 static __initdata struct lsm_info *exclusive;
+
+/*
+ * Necessary information about a static
+ * slot to call __static_call_update
+ */
+struct static_slot {
+	/* static call key as defined by STATIC_CALL_KEY */
+	struct static_call_key *key;
+	/* static call trampoline as defined by STATIC_CALL_TRAMP */
+	void *trampoline;
+};
+
+/*
+ * Table of the static calls for each LSM hook.
+ * Once the LSMs are initialized, their callbacks will be copied to these
+ * tables such that the slots are filled backwards (from last to first).
+ * This way, we can jump directly to the first used slot, and execute 
+ * all of them after. This essentially makes the entry point point 
+ * dynamic to adapt the number of slot to the number of callbacks.
+ */
+struct static_slot_list {
+	#define LSM_HOOK(RET, DEFAULT, NAME, ...) \
+		struct static_slot NAME[SECURITY_STATIC_SLOT_COUNT];
+	#include <linux/lsm_hook_defs.h>
+	#undef LSM_HOOK
+} __randomize_layout;
+
+/*
+ * Index of the first used static call for each LSM hook
+ * in the corresponding static_slot_list table.
+ * All slots with greater indices are used. 
+ * If no slot is used, the default value is INT_MAX.
+ */
+struct base_slot_idx {
+	#define LSM_HOOK(RET, DEFAULT, NAME, ...) \
+		int NAME;
+	#include <linux/lsm_hook_defs.h>
+	#undef LSM_HOOK
+} __randomize_layout;
+
+/*
+ * Create the static slots for each LSM hook, initially empty.
+ * This will expand to:
+ *
+ * [...]
+ *
+ * DEFINE_STATIC_CALL_NULL(security_static_slot_file_permission_0,
+ *			   *((int(*)(struct file *file, int mask)))NULL);
+ * DEFINE_STATIC_CALL_NULL(security_static_slot_file_permission_1, ...);
+ *
+ * [...]
+ */
+#define CREATE_STATIC_SLOT(NUM, NAME, RET, ...)				\
+	DEFINE_STATIC_CALL_NULL(STATIC_SLOT(NAME, NUM),			\
+				*((RET(*)(__VA_ARGS__))NULL));
+
+#define LSM_HOOK(RET, DEFAULT, NAME, ...)				\
+	SECURITY_FOREACH_STATIC_SLOT(CREATE_STATIC_SLOT, NAME, RET, __VA_ARGS__)
+#include <linux/lsm_hook_defs.h>
+#undef LSM_HOOK
+#undef CREATE_STATIC_SLOT
+
+/*
+ * Initialise a table of static slots for each LSM hook.
+ * When defined with DEFINE_STATIC_CALL_NULL as above, a static call is
+ * a key and a trampoline. Both are needed to use __static_call_update.
+ * This will expand to:
+ * struct static_slot_list static_slots = {
+ *	[...]
+ *	.file_permission = {
+ *		(struct static_slot) {
+ *			.key = &STATIC_CALL_KEY(
+ *				security_static_slot_file_permission_0),
+ *			.trampoline = &STATIC_CALL_TRAMP(
+ *				security_static_slot_file_permission_0)
+ *		},
+ *		(struct static_slot) {
+ *			.key = &STATIC_CALL_KEY(
+ *				security_static_slot_file_permission_1),
+ *			.trampoline = &STATIC_CALL_TRAMP(
+ *				security_static_slot_file_permission_1)
+ *		},
+ *		[...]
+ *	},
+ *	.file_alloc_security = {
+ *		[...]
+ *	},
+ *	[...]
+ * }
+ */
+static struct static_slot_list static_slots __initdata = {
+#define DEFINE_SLOT(NUM, NAME)						\
+	(struct static_slot) {					\
+		.key = &STATIC_CALL_KEY(STATIC_SLOT(NAME, NUM)),	\
+		.trampoline = &STATIC_CALL_TRAMP(STATIC_SLOT(NAME, NUM))\
+	},
+#define LSM_HOOK(RET, DEFAULT, NAME, ...)				\
+	.NAME = {							\
+		SECURITY_FOREACH_STATIC_SLOT(DEFINE_SLOT, NAME)		\
+	},
+#include <linux/lsm_hook_defs.h>
+#undef LSM_HOOK
+#undef DEFINE_SLOT
+};
+
+/*
+ * The base slot index for each is initially INT_MAX, which means
+ * that no slot is used yet.
+ * When expanded, this results in:
+ * struct base_slot_idx base_slot_idx = {
+ *	[...]
+ *	.file_permission = INT_MAX,
+ *	.file_alloc_security = INT_MAX,
+ *	[...]
+ * }
+ */
+static struct base_slot_idx base_slot_idx __lsm_ro_after_init = {
+#define LSM_HOOK(RET, DEFAULT, NAME, ...)				\
+	.NAME = INT_MAX,
+#include <linux/lsm_hook_defs.h>
+#undef LSM_HOOK
+};
 
 static __initdata bool debug;
 #define init_debug(...)						\
@@ -307,6 +431,46 @@ static void __init ordered_lsm_parse(const char *order, const char *origin)
 	kfree(sep);
 }
 
+static void __init lsm_init_hook_static_slot(struct static_slot *slots,
+					     struct hlist_head *head,
+					     int *first_slot_idx)
+{
+	struct security_hook_list *pos;
+	struct static_slot *slot;
+	int slot_cnt;
+
+	slot_cnt = 0;
+	hlist_for_each_entry_rcu(pos, head, list)
+		slot_cnt++;
+
+	if (slot_cnt > SECURITY_STATIC_SLOT_COUNT)
+		panic("%s - No static hook slot remaining to add LSM hook.\n",
+		      __func__);
+
+	if (slot_cnt == 0) {
+		*first_slot_idx = INT_MAX;
+		return;
+	}
+
+	*first_slot_idx = SECURITY_STATIC_SLOT_COUNT - slot_cnt;
+	slot = slots + *first_slot_idx;
+	hlist_for_each_entry_rcu(pos, head, list) {
+		__static_call_update(slot->key, slot->trampoline,
+				     pos->hook.generic_func);
+		slot++;
+	}
+}
+
+static void __init lsm_init_static_slots(void)
+{
+#define LSM_HOOK(RET, DEFAULT, NAME, ...)				\
+	lsm_init_hook_static_slot(static_slots.NAME,			\
+				  &security_hook_heads.NAME,		\
+				  &base_slot_idx.NAME);
+#include <linux/lsm_hook_defs.h>
+#undef LSM_HOOK
+}
+
 static void __init lsm_early_cred(struct cred *cred);
 static void __init lsm_early_task(struct task_struct *task);
 
@@ -354,6 +518,7 @@ static void __init ordered_lsm_init(void)
 	lsm_early_task(current);
 	for (lsm = ordered_lsms; *lsm; lsm++)
 		initialize_lsm(*lsm);
+	lsm_init_static_slots();
 
 	kfree(ordered_lsms);
 }
@@ -374,6 +539,7 @@ int __init early_security_init(void)
 		prepare_lsm(lsm);
 		initialize_lsm(lsm);
 	}
+	lsm_init_static_slots();
 
 	return 0;
 }
@@ -696,27 +862,36 @@ static void __init lsm_early_task(struct task_struct *task)
  * call_int_hook:
  *	This is a hook that returns a value.
  */
+#define __CASE_CALL_STATIC_VOID(NUM, HOOK, ...)				\
+	case NUM:							\
+		static_call(STATIC_SLOT(HOOK, NUM))(__VA_ARGS__);	\
+		fallthrough;
 
-#define call_void_hook(FUNC, ...)				\
-	do {							\
-		struct security_hook_list *P;			\
-								\
-		hlist_for_each_entry(P, &security_hook_heads.FUNC, list) \
-			P->hook.FUNC(__VA_ARGS__);		\
-	} while (0)
+#define call_void_hook(FUNC, ...) do {					\
+	switch (base_slot_idx.FUNC) {					\
+	SECURITY_FOREACH_STATIC_SLOT(__CASE_CALL_STATIC_VOID,		\
+				     FUNC, __VA_ARGS__)			\
+	default :							\
+		break;							\
+	}								\
+} while (0)
 
-#define call_int_hook(FUNC, IRC, ...) ({			\
-	int RC = IRC;						\
-	do {							\
-		struct security_hook_list *P;			\
-								\
-		hlist_for_each_entry(P, &security_hook_heads.FUNC, list) { \
-			RC = P->hook.FUNC(__VA_ARGS__);		\
-			if (RC != 0)				\
-				break;				\
-		}						\
-	} while (0);						\
-	RC;							\
+#define __CASE_CALL_STATIC_INT(NUM, R, HOOK, ...)			\
+	case NUM:							\
+		R = static_call(STATIC_SLOT(HOOK, NUM))(__VA_ARGS__);	\
+		if (R != 0)						\
+			break;						\
+		fallthrough;
+
+#define call_int_hook(FUNC, IRC, ...) ({				\
+	int RC = IRC;							\
+	switch (base_slot_idx.FUNC) {					\
+	SECURITY_FOREACH_STATIC_SLOT(__CASE_CALL_STATIC_INT,		\
+				     RC, FUNC, __VA_ARGS__)		\
+	default :							\
+		break;							\
+	}								\
+	RC;								\
 })
 
 /* Security operations */
