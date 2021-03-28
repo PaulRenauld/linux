@@ -436,16 +436,11 @@ static void __init lsm_init_hook_static_slot(struct static_slot *slots,
 					     int *first_slot_idx)
 {
 	struct security_hook_list *pos;
-	struct static_slot *slot;
-	int slot_cnt;
+	int slot_cnt, slot_idx;
 
 	slot_cnt = 0;
 	hlist_for_each_entry_rcu(pos, head, list)
 		slot_cnt++;
-
-	if (slot_cnt > SECURITY_STATIC_SLOT_COUNT)
-		panic("%s - No static hook slot remaining to add LSM hook.\n",
-		      __func__);
 
 	if (slot_cnt == 0) {
 		*first_slot_idx = INT_MAX;
@@ -453,11 +448,13 @@ static void __init lsm_init_hook_static_slot(struct static_slot *slots,
 	}
 
 	*first_slot_idx = SECURITY_STATIC_SLOT_COUNT - slot_cnt;
-	slot = slots + *first_slot_idx;
+	slot_idx = *first_slot_idx;
 	hlist_for_each_entry_rcu(pos, head, list) {
-		__static_call_update(slot->key, slot->trampoline,
-				     pos->hook.generic_func);
-		slot++;
+		if (slot_idx >= 0)
+			__static_call_update(slots[slot_idx].key,
+					     slots[slot_idx].trampoline,
+					     pos->hook.generic_func);
+		slot_idx++;
 	}
 }
 
@@ -869,9 +866,20 @@ static void __init lsm_early_task(struct task_struct *task)
 
 #define call_void_hook(FUNC, ...) do {					\
 	switch (base_slot_idx.FUNC) {					\
+	default : { /* Callbacks that don't fit in the static slots */	\
+		struct security_hook_list *__hook_list_pos;		\
+		int __remaining = base_slot_idx.FUNC;			\
+		hlist_for_each_entry(__hook_list_pos,			\
+				     &security_hook_heads.FUNC, list) { \
+			__hook_list_pos->hook.FUNC(__VA_ARGS__);	\
+			if (++__remaining >= 0)				\
+				break;					\
+		}							\
+		fallthrough;						\
+	}								\
 	SECURITY_FOREACH_STATIC_SLOT(__CASE_CALL_STATIC_VOID,		\
 				     FUNC, __VA_ARGS__)			\
-	default :							\
+	case INT_MAX: /* No callback registered */			\
 		break;							\
 	}								\
 } while (0)
@@ -886,9 +894,22 @@ static void __init lsm_early_task(struct task_struct *task)
 #define call_int_hook(FUNC, IRC, ...) ({				\
 	int RC = IRC;							\
 	switch (base_slot_idx.FUNC) {					\
+	default : { /* Callbacks that don't fit in the static slots */	\
+		struct security_hook_list *__hook_list_pos;		\
+		int __remaining = base_slot_idx.FUNC;			\
+		hlist_for_each_entry(__hook_list_pos,			\
+				     &security_hook_heads.FUNC, list) { \
+			RC = __hook_list_pos->hook.FUNC(__VA_ARGS__);	\
+			if (RC != 0 || ++__remaining >= 0)		\
+				break;					\
+		}							\
+		if (RC != 0)						\
+			break;						\
+		fallthrough;						\
+	}								\
 	SECURITY_FOREACH_STATIC_SLOT(__CASE_CALL_STATIC_INT,		\
 				     RC, FUNC, __VA_ARGS__)		\
-	default :							\
+	case INT_MAX: /* No callback registered */			\
 		break;							\
 	}								\
 	RC;								\
